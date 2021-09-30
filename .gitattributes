@@ -1,2 +1,2 @@
-* text=auto !eol 
+* text=auto !eol
 test/test.properties -text svneol=unset#text/plain
