@@ -27,16 +27,33 @@ extract_addresses_from_html() を実際のDOM構造に合わせて調整する�
 
 import argparse
 import re
+import ssl
 import sys
 import time
 from pathlib import Path
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.ssl_ import create_urllib3_context
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from config import DATA_PROCESSED, WARDS  # noqa: E402
 
 GSI_GEOCODE_URL = "https://msearch.gsi.go.jp/address-search/AddressSearch"
+
+
+class LegacyDHAdapter(HTTPAdapter):
+    """gaccom.jp はDH鍵長が短いサーバー証明書を使っており、OpenSSL 3.0の
+    デフォルトセキュリティレベル(SECLEVEL=2)では接続できない。
+    このアダプタはgaccom.jpへの接続時のみSECLEVEL=1に緩め、
+    証明書検証自体は無効化しない(verifyはSessionの設定に従う)。
+    """
+
+    def init_poolmanager(self, *args, **kwargs):
+        ctx = create_urllib3_context()
+        ctx.set_ciphers("DEFAULT@SECLEVEL=1")
+        kwargs["ssl_context"] = ctx
+        return super().init_poolmanager(*args, **kwargs)
 
 # 新潟市 + 区名 + 町丁目(丁目/番地を含む場合がある) を拾う正規表現。
 # 例: "新潟市東区東出来島3丁目" 「新潟市江南区亀田" など。
@@ -94,6 +111,8 @@ def main():
 
     session = requests.Session()
     session.headers.update({"User-Agent": "Mozilla/5.0 (research; niigata-safety-scoring)"})
+    session.mount("https://www.gaccom.jp", LegacyDHAdapter())
+    session.mount("https://gaccom.jp", LegacyDHAdapter())
 
     print(f"[INFO] Fetching {args.url}")
     resp = session.get(args.url, timeout=15)
