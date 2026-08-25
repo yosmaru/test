@@ -8,88 +8,112 @@
 ① 学区境界のポリゴンデータ と ② 個別事案の緯度経度 を自前で空間結合
 (Point-in-Polygon)する必要がある。詳細な設計は `PROJECT_BRIEF.md` の内容に準拠している。
 
-## 重要な注意: このリポジトリで実行した環境について
+## 実行結果(実データ)
 
-**このパイプラインを開発したリモート実行環境(Claude Code on the web の
-サンドボックス)は、組織のアウトバウンドネットワークポリシーにより、
-以下の外部サイトへの直接アクセスがすべてブロックされている**
-(egress proxy で 403 応答を確認済み):
+組織のネットワークポリシーで対象サイトへのアクセスが許可された後、
+実データで Step1〜Step4 を実行し、最終スコアを算出済み。
+結果は `output/school_district_safety_scores.{csv,md}` を参照。
 
-- `nlftp.mlit.go.jp` (国土数値情報 - 学区境界データ)
-- `map.police.niigata.dsvc.jp` (新潟県警・事件事故マップ)
-- `www.gaccom.jp` (ガッコム安全ナビ)
-- `msearch.gsi.go.jp` (国土地理院 ジオコーディングAPI)
-- `www.pref.niigata.lg.jp` / `www.city.niigata.lg.jp` (区単位統計)
+| エリア | 区 | safety_score(相対) |
+|---|---|---|
+| 越後石山 | 東区 | 67.7 |
+| 荻川 | 秋葉区 | 58.1 |
+| 曽野木 | 江南区 | 57.5 |
+| 新津 | 秋葉区 | 51.2 |
+| 亀田 | 江南区 | 50.2 |
 
-そのため、**このセッションでは実データの取得・実際のスコア算出を行うことができなかった**。
-代わりに以下を実施した:
+**このスコアは絶対的な安全/危険ではなく、対象5エリア間の相対比較。**
+犯罪発生率(GSI/県警公式データ)・不審者事案率(県警公式データ+GSIジオコーディング)・
+交通事故率(県警公式データ)を使用。浸水/土砂災害ハザードと防犯灯密度は
+取得元が特定できなかったため、今回のスコアには含めていない(中立値扱い)。
 
-1. Step1〜Step4 すべての処理を行う **実行可能なスクリプト一式** を実装
-2. 外部アクセスを必要としない Step3(空間結合・正規化・重み付けスコアリング)
-   ロジックについては、合成(ダミー)データで **回帰テストを実施し、正しく動作することを検証済み**
-   (`scripts/generate_synthetic_fixtures.py` → `scripts/test_pipeline_synthetic.py`)
-3. Step1/Step2 は、外部サイトへアクセス可能な環境(ローカルPC等)で
-   実行する必要がある旨をスクリプト内のdocstringに明記
+区単位の妥当性チェックとして、県警公式データ(criminal_full.tsv)から
+区別の総件数を集計した参考値: 中央区630 > 西区402 > 東区232 > 江南区142 ≈ 秋葉区132
+> 北区105 > 南区41 > 西蒲区34 (件数は集計期間内の全件、期間はデータ提供元の仕様に依存)。
+新潟市・新潟県警が公表するPDF統計との突き合わせは、このセッションのPDF処理ライブラリが
+環境側の依存関係(cryptography/cffi)の問題で動作しなかったため未実施。
+`data/raw/ward_baseline/hanzai-R5.pdf` 等はダウンロード済みなので、
+別環境で `pdftotext` 等を使って手動突き合わせすることを推奨する。
 
-外部アクセス可能な環境でこのリポジトリを clone し、以下の手順で実データを投入すれば、
-そのままパイプラインを完走できる設計になっている。
+### データソースと既知の制約
+
+- **犯罪・交通事故**: 新潟県警・事件事故マップ(`map.police.niigata.dsvc.jp`)が配信する
+  静的TSV(`/data/tsv/criminal_full.tsv`, `/data/tsv/traffic_accident_full.tsv`)を直接取得。
+  緯度経度が付与済みのため、追加のジオコーディングは不要だった。
+- **不審者事案**: 同サイトの `/data/tsv/suspicious_person_full.tsv`(県警公式)を使用。
+  緯度経度が無いため、町丁目の住所テキストを国土地理院APIでジオコーディングした。
+  ガッコム安全ナビは、この公式データで代替可能と判断し未使用(データの質・網羅性で
+  県警公式データを優先)。
+- **学区境界(Step1)**: 国土数値情報A27には「2021年度版」は存在せず、新潟県分は
+  A27-10(2010年・新潟市を含む)とA27-16(2016年・新潟市を含まない)の2版のみだった。
+  - 越後石山・亀田・曽野木・新津の4エリアはA27-10の学区ポリゴン(学校名で対応関係を確認)を使用。
+    ただし「越後石山」という名称の小学校は存在せず、新潟市公式の通学区域ページ
+    (`city.niigata.lg.jp/kosodate/gakko/.../tsugakukuiki/`)で確認したところ、
+    実際は「江南小学校」区(石山1・2丁目を含む)が該当することが判明した。
+  - **荻川小学校はKSJデータに校区ポリゴンが存在しない**(2010年版には学校自体が
+    未収録)。市の公式ページで対象町丁目(あおば通・市之瀬・荻野町・覚路津・車場・
+    こがね町・中野4/5丁目)を特定し、それぞれをGSIでジオコーディングした9地点の
+    凸包(convex hull)で近似した。**これは公式境界ではなく参考値**であり、
+    実際の物件購入時は必ず教育委員会に番地単位で確認すること。
+  - 亀田(3校)・曽野木(2校)・新津(3校)は、いずれも単一の校区ではなく
+    複数の小学校区の合算(union)である点に注意。
+- **世帯数**: 新潟市が公表する「年齢(5歳ごと)町丁別人口統計」(令和8年3月末時点、
+  世帯数列を含む)を、上記の町丁目リストで集計。一部の町丁目(私道・少数世帯地区等)は
+  国の基準により件数非公表("x")、または町名の表記ゆれで自動マッチできず、
+  合計から漏れている可能性がある(亀田・新津で数件ずつ)。
+- **浸水/土砂災害ハザード・防犯灯密度**: ブリーフに具体的な取得元の指定がなく、
+  今回のセッションでは取得元を特定できなかったため未実装。取得できれば
+  `data/processed/hazard_polygons.geojson` / `streetlight_points.csv` を配置するだけで
+  Step3がそのまま利用する設計になっている。
+
+## 参考: このセッションで直面したネットワーク制約(経緯)
+
+開発初期、このリモート実行環境は組織のアウトバウンドネットワークポリシーにより
+対象サイトへのアクセスがブロックされていた(egress proxyで403)。
+ユーザーに組織管理者へのドメイン許可を依頼してもらい、許可後に上記の実データ取得・
+スコア算出まで完了した。なお `nlftp.mlit.go.jp` と `www.gaccom.jp` は当初アクセス不可で、
+前者は後から許可されたが、後者は結局使用しなかった(前述の通り県警公式データで代替)。
+またヘッドレスブラウザ+プロキシ明示設定を伴う操作は自動権限判定でブロックされたため、
+代わりにJSバンドルを直接取得してAPIエンドポイントを特定する方法に切り替えた。
 
 ## セットアップ
 
 ```bash
 pip install -r requirements.txt
-playwright install chromium   # Step2-1で使用
 ```
 
-## 実行手順
+(`playwright` は `step2a_police_map_capture.py`(調査用・通常は不要)でのみ使用する)
 
-### Step 1: 学区境界データの取得
+## 実行手順(実データ、動作確認済み)
 
-1. https://nlftp.mlit.go.jp/ksj/gml/datalist/KsjTmplt-A27.html から
-   新潟県分の小学校区データ(SHAPE形式)をダウンロードし、
-   `data/raw/` 以下に展開する
-2. 抽出・目視確認用スクリプトを実行:
-   ```bash
-   python3 scripts/step1_school_district_boundaries.py --raw-dir data/raw
-   ```
-3. 出力された `data/processed/school_districts_candidates.geojson` と
-   コンソールのヒット一覧を **必ず目視確認**し、5エリアと学区名の対応関係を確定する
-   (自動抽出だけでは学区名の表記ゆれで漏れる可能性があるため)
-4. 確定後、`area` 列(5エリア名のいずれか)を付与して
-   `data/processed/school_districts_confirmed.geojson` として保存する
+```bash
+python3 scripts/step1b_build_confirmed_districts.py   # 学区ポリゴン構築(A27-10 + 荻川近似)
+python3 scripts/step2a_fetch_police_data.py            # 犯罪・交通事故・不審者事案の取得
+python3 scripts/step2d_household_counts.py              # 世帯数の集計
+python3 scripts/step3_spatial_join_scoring.py           # 空間結合・スコアリング
+```
 
-### Step 2: 事案データの収集
+4つとも冪等(何度実行しても同じ結果になる)で、`data/raw/` にキャッシュがあれば
+再ダウンロードをスキップする。各スクリプトの docstring に、データソースの詳細・
+既知の制約(学区名とエリア名の不一致、荻川の近似方法など)を記載しているので、
+初めて読む場合は各ファイル冒頭のコメントを参照すること。
 
-- **2-1 新潟県警・事件事故マップ**(SPA):
-  ```bash
-  python3 scripts/step2a_police_map_capture.py --url https://map.police.niigata.dsvc.jp/ --manual
-  ```
-  ブラウザの通信を記録し、地図ピンのAPIエンドポイントを特定する。
-  特定後、`parse_captured_responses()` を実データ構造に合わせて実装し、
-  `data/processed/crime_points.csv` (columns: lat, lon) を出力する。
+上記で使わなかった以下のスクリプトは、代替手段・調査用として残している:
 
-- **2-2 ガッコム安全ナビ**:
-  ```bash
-  python3 scripts/step2b_gaccom_geocode.py --ward 東区 --url <対象区ページURL>
-  ```
-  区ごとに実行し、`data/processed/suspicious_points.csv` へ追記する。
-  国土地理院APIで自動ジオコーディングまで行う。
+- `step1_school_district_boundaries.py`: KSJデータから候補ポリゴンを機械的に
+  洗い出す汎用ツール(対象エリア・都道府県が変わった場合用)
+- `step2a_police_map_capture.py`: Playwrightでのブラウザ通信監視によるAPI調査用
+  (サイト実装が変わり、JSバンドル解析が通用しなくなった場合の再調査用)
+- `step2b_gaccom_geocode.py`: ガッコム安全ナビからの不審者事案取得(今回は
+  県警公式データで代替したため未使用)
+- `step2c_ward_baseline.py`: 区単位のベースライン統計ページを取得(表がPDFの
+  場合はダウンロードのみ行い、抽出は手動)
 
-- **2-3 区単位ベースライン(妥当性チェック用)**:
-  ```bash
-  python3 scripts/step2c_ward_baseline.py --url https://www.pref.niigata.lg.jp/site/kenkei/anzen-ansin-shityouson08.html
-  ```
-  表がPDF/画像の場合は手動でのテーブル抽出が必要な旨を出力する。
-
-- **交通事故データ・ハザードデータ・防犯灯データ**:
-  ブリーフには具体的な取得元の指定がないため未実装。取得後、
-  それぞれ `data/processed/traffic_points.csv`,
-  `data/processed/hazard_polygons.geojson`,
-  `data/processed/streetlight_points.csv` として配置すれば
-  Step3でそのまま利用できる(一部が無くても、その指標は自動でスキップされる)。
-
-- **世帯数**(国勢調査・町丁目別を学区単位に集計):
-  `data/processed/households.csv` (columns: area, households) として配置する。
+- **交通事故データ・ハザードデータ・防犯灯データ**: 交通事故は
+  `step2a_fetch_police_data.py` で取得済み。浸水/土砂災害ハザードと防犯灯密度は、
+  ブリーフに具体的な取得元の指定がなく今回は未実装。取得できれば
+  `data/processed/hazard_polygons.geojson` / `streetlight_points.csv` を配置するだけで
+  Step3がそのまま利用する設計になっている。
 
 ### Step 3: 空間結合とスコアリング
 
@@ -134,20 +158,23 @@ python3 scripts/test_pipeline_synthetic.py
 
 ```
 scripts/
-  config.py                          対象エリア・区マッピング・重み定義
-  step1_school_district_boundaries.py
-  step2a_police_map_capture.py
-  step2b_gaccom_geocode.py
-  step2c_ward_baseline.py
-  step3_spatial_join_scoring.py
-  generate_synthetic_fixtures.py     検証用ダミーデータ生成
-  test_pipeline_synthetic.py         パイプライン回帰テスト
+  config.py                              対象エリア・区マッピング・重み定義
+  step1b_build_confirmed_districts.py    [実行する] 学区ポリゴン構築
+  step2a_fetch_police_data.py            [実行する] 犯罪/交通事故/不審者データ取得
+  step2d_household_counts.py             [実行する] 世帯数集計
+  step3_spatial_join_scoring.py          [実行する] 空間結合・スコアリング
+  step1_school_district_boundaries.py    (汎用の候補抽出ツール、未使用)
+  step2a_police_map_capture.py           (Playwright調査用、未使用)
+  step2b_gaccom_geocode.py               (ガッコム用、未使用)
+  step2c_ward_baseline.py                (区統計ページ取得、参考)
+  generate_synthetic_fixtures.py         検証用ダミーデータ生成
+  test_pipeline_synthetic.py             パイプライン回帰テスト
 data/
-  raw/                               ダウンロードした生データ置き場
-  processed/                         各Stepの中間・最終データ置き場
+  raw/                               ダウンロードした生データ置き場(.gitignore対象、再取得可能)
+  processed/                         各Stepの中間・最終データ置き場(コミット対象)
   sample_synthetic/                  検証用ダミーデータ(実データではない)
 output/
-  school_district_safety_scores.{csv,md}   最終成果物(実データ投入後に生成)
+  school_district_safety_scores.{csv,md}   最終成果物(実データによる算出結果)
   sample_synthetic/                  検証用ダミー出力(実データではない)
 ```
 

@@ -1,15 +1,24 @@
 """
-Step 1: 学区境界データの取得・抽出
+Step 1: 学区境界データの取得・抽出(汎用の候補抽出ツール)
+
+【今回の5エリアには step1b_build_confirmed_districts.py を使用】
+新潟県分のA27データには実際には「2021年度版」は存在せず、A27-10(2010年)/
+A27-16(2016年、新潟市を含まない)の2版のみだった。また学区名がエリア名と
+一致しない(例:越後石山→江南小学校区)ケースや、KSJに校区が収録されていない
+ケース(荻川)があり、単純なキーワード一致では対応できなかったため、
+実際の構築には人間による目視確認済みの対応関係をハードコードした
+`step1b_build_confirmed_districts.py` を使用した。
+
+本スクリプトは、対象エリア・都道府県・年度が変わった場合に、KSJデータから
+候補ポリゴンを機械的に洗い出す汎用ツールとして残している。
 
 国土数値情報「小学校区データ」(A27, 新潟県分)を GeoPandas で読み込み、
 新潟市・対象5エリアに該当する学区ポリゴンだけを抽出する。
 
 事前準備(このスクリプト自体はダウンロードを行わない):
   1. https://nlftp.mlit.go.jp/ksj/gml/datalist/KsjTmplt-A27.html を開き、
-     利用規約に同意のうえ新潟県(15)分の SHAPE 形式データをダウンロードする。
-     (このリモート実行環境は組織のアウトバウンドポリシーにより
-      nlftp.mlit.go.jp への直接アクセスがブロックされているため、
-      ダウンロードはこのスクリプトを実行する側のマシン/環境で行うこと)
+     対象都道府県の SHAPE 形式データをダウンロードする
+     (利用規約への同意が必要な場合がある)
   2. ダウンロードした zip を data/raw/ 以下に展開する
      (例: data/raw/A27-XX_15_GML/*.shp)
 
@@ -96,7 +105,13 @@ def main():
 
     gdfs = []
     for shp in shapefiles:
-        gdf = gpd.read_file(shp, encoding="utf-8")
+        # 国土数値情報(KSJ)のシェープファイルはDBF属性がShift-JIS(cp932)で
+        # 格納されていることが多い。UTF-8で失敗したらcp932にフォールバックする。
+        try:
+            gdf = gpd.read_file(shp, encoding="utf-8")
+        except UnicodeDecodeError:
+            print(f"[INFO] {shp}: UTF-8でのデコードに失敗したため cp932(Shift-JIS) で再読み込みします")
+            gdf = gpd.read_file(shp, encoding="cp932")
         gdfs.append(gdf)
 
     import pandas as pd

@@ -220,6 +220,9 @@ def main():
         "hazard_score(重複率) | streetlight_density | 元データ件数(crime/suspicious/traffic) |",
         "|---|---|---|---|---|---|---|---|---|",
     ]
+    def fmt(v, spec):
+        return "N/A" if pd.isna(v) else format(v, spec)
+
     for area, row in result.iterrows():
         counts = f"{row['crime_count']}/{row['suspicious_count']}/{row['traffic_count']}"
         md_lines.append(
@@ -227,7 +230,7 @@ def main():
             f"{row['crime_rate']:.3f}{row['crime_rate_note']} | "
             f"{row['suspicious_rate']:.3f}{row['suspicious_rate_note']} | "
             f"{row['traffic_rate']:.3f}{row['traffic_rate_note']} | "
-            f"{row['hazard_score']:.3f} | {row['streetlight_density']:.2f} | {counts} |"
+            f"{fmt(row['hazard_score'], '.3f')} | {fmt(row['streetlight_density'], '.2f')} | {counts} |"
         )
     md_lines.append("")
     md_lines.append("## 使用した重み")

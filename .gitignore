@@ -1,3 +1,8 @@
 __pycache__/
 *.pyc
 .DS_Store
+
+# 生データはサイズが大きく(数十MB)、かつスクリプトで再取得可能なためコミットしない。
+# data/processed/ (整形済み中間データ)と output/ (最終成果物)はコミットする。
+data/raw/*
+!data/raw/.gitkeep
