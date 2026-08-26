@@ -3,7 +3,9 @@ Step 3: 空間結合(Point-in-Polygon)とスコアリング
 
 Step1で確定した学区ポリゴンと、Step2で収集した各種事案(緯度経度)を
 GeoPandasで空間結合し、学区ごとの件数を集計。世帯数で正規化して発生率に変換し、
-複数指標を重み付け合算して総合安全スコアを算出する。
+複数指標を重み付け合算して総合安全スコア(safety_score)を算出する。
+併せて、犯罪発生率のみ・交通事故率のみをそれぞれ単独で正規化した
+crime_score / traffic_score も出力する(他指標を混ぜたくない場合の比較用)。
 
 入力(すべて data/processed/ 配下を想定。無いものはその指標をスキップし、
 NEXT STEPで案内する):
@@ -194,6 +196,11 @@ def main():
     result["risk_score"] = risk
     result["safety_score"] = (1 - risk) * 100  # 0-100、高いほど相対的に安全
 
+    # 犯罪・交通事故それぞれ単独の相対スコア(他指標を含めない、5エリア間の
+    # 発生率のみを正規化して反転したもの。高いほど相対的に安全)。
+    result["crime_score"] = (1 - norm["crime_rate"]) * 100
+    result["traffic_score"] = (1 - norm["traffic_rate"]) * 100
+
     for col, count_col in [
         ("crime_rate", "crime_count"),
         ("suspicious_rate", "suspicious_count"),
@@ -216,9 +223,10 @@ def main():
         "**注意**: このスコアは絶対的な安全/危険を表すものではなく、"
         "対象5エリア間の相対順位です。サンプル数が少ない指標には「参考値」の注記があります。",
         "",
-        "| エリア | 区 | safety_score | crime_rate | suspicious_rate | traffic_rate | "
+        "| エリア | 区 | safety_score(総合) | crime_score(犯罪のみ) | traffic_score(交通事故のみ) | "
+        "crime_rate | suspicious_rate | traffic_rate | "
         "hazard_score(重複率) | streetlight_density | 元データ件数(crime/suspicious/traffic) |",
-        "|---|---|---|---|---|---|---|---|---|",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     def fmt(v, spec):
         return "N/A" if pd.isna(v) else format(v, spec)
@@ -227,6 +235,7 @@ def main():
         counts = f"{row['crime_count']}/{row['suspicious_count']}/{row['traffic_count']}"
         md_lines.append(
             f"| {area} | {row['ward']} | {row['safety_score']:.1f} | "
+            f"{row['crime_score']:.1f} | {row['traffic_score']:.1f} | "
             f"{row['crime_rate']:.3f}{row['crime_rate_note']} | "
             f"{row['suspicious_rate']:.3f}{row['suspicious_rate_note']} | "
             f"{row['traffic_rate']:.3f}{row['traffic_rate_note']} | "
@@ -241,7 +250,7 @@ def main():
     out_md.write_text("\n".join(md_lines), encoding="utf-8")
     print(f"[INFO] Markdownを出力しました: {out_md}")
 
-    print("\n" + result[["ward", "safety_score"]].to_string())
+    print("\n" + result[["ward", "safety_score", "crime_score", "traffic_score"]].to_string())
 
 
 if __name__ == "__main__":
