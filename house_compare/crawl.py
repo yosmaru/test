@@ -7,7 +7,10 @@ from pathlib import Path
 
 
 def list_videos(channel_url: str, limit: int | None = None) -> list[dict]:
-    """チャンネル内の動画 ID とタイトルを一覧する（ダウンロードはしない）。"""
+    """チャンネル内の動画 ID とタイトルを一覧する（ダウンロードはしない）。
+
+    チャンネル URL には /videos を付けて取得するので、ショート動画（/shorts タブ）は含まれない。
+    """
     url = channel_url.rstrip("/")
     if not re.search(r"/(videos|streams|shorts)$", url) and "list=" not in url:
         url += "/videos"
@@ -18,6 +21,8 @@ def list_videos(channel_url: str, limit: int | None = None) -> list[dict]:
     videos = []
     for line in out.splitlines():
         item = json.loads(line)
+        if "/shorts/" in (item.get("url") or ""):
+            continue
         videos.append({"id": item["id"], "title": item.get("title", "")})
     return videos
 

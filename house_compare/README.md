@@ -46,6 +46,16 @@ python -m house_compare compare data/mominoki data/mominoki/answers_B社.md --na
 - 複数社に聞く場合は、同じ質問票で回答ファイルを会社ごとに作り、`--name` を変えて compare を実行してください。
 - B社にも YouTube チャンネルがある場合は、`answer` コマンドで B社の動画から回答を推定することもできます。
 
+## API キーなしで進める場合（Claude Code のセッションで分析する）
+
+字幕の取得（① crawl）だけを実行し、② 以降は Claude Code に次のように頼みます。
+
+> `python -m house_compare crawl https://www.youtube.com/@mominoki_house_niigata data/mominoki` を実行し、
+> `data/mominoki/transcripts/` の文字起こしを読んで、`analyze.py` と同じ形式で
+> `key_points.json`・`questions.md`・`questions_notes.md` を作って。
+
+打ち合わせ後は、記入済みの質問票を渡して比較レポートを作ってもらいます。
+
 ## 注意
 
 - 字幕の無い動画はスキップされます（`videos.json` の `has_transcript` で確認できます）。
