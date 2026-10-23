@@ -45,8 +45,9 @@ class Question(BaseModel):
     id: str = Field(description="Q01 形式の連番")
     point_id: str = Field(description="元になった重要ポイントの ID")
     theme: str
-    question: str = Field(description="他社にそのまま聞ける中立的な質問文")
-    why_ask: str = Field(description="この質問で何の違いが見えるか")
+    question: str = Field(description="施主が打ち合わせでそのまま聞ける中立的な質問文")
+    follow_ups: list[str] = Field(description="答えが曖昧だったときの深掘り質問（1〜2個）")
+    listen_for: str = Field(description="回答を聞くときに注目すべき点（数値・根拠・実例など）")
 
 
 class Questions(BaseModel):
@@ -85,7 +86,8 @@ class Comparison(BaseModel):
 class Report(BaseModel):
     overview: str = Field(description="両社の考え方の違いの総括（5文程度）")
     comparisons: list[Comparison]
-    follow_up_questions: list[str] = Field(description="違いをさらに掘り下げるための追加質問")
+    watch_outs: list[str] = Field(description="施主として注意したい点（回答が曖昧だった項目、根拠が示されなかった項目など）")
+    follow_up_questions: list[str] = Field(description="次の打ち合わせで追加で聞くべき質問")
 
 
 # ---------- 入出力ユーティリティ ----------
@@ -157,23 +159,59 @@ def extract(company_dir: Path, max_points: int = 20) -> KeyPoints:
 
 
 def make_questions(company_dir: Path) -> Questions:
-    """重要ポイントを、他社に投げられる中立的な質問に変換する。"""
+    """重要ポイントを、施主が他社との打ち合わせで聞ける中立的な質問に変換する。"""
     kp = KeyPoints.model_validate_json((company_dir / "key_points.json").read_text(encoding="utf-8"))
     result = ask(
         SYSTEM,
         "以下はA社が家づくりで重要だと考えているポイントです。\n\n"
         + "\n".join(f"- {p.id} ({p.theme}) {p.claim} ／理由: {p.reason}" for p in kp.key_points)
-        + "\n\n各ポイントについて、他の住宅会社にそのまま投げかけられる質問を1つずつ作ってください。条件:\n"
-        "- A社の答えを前提にした誘導質問にしない（例: ×「高気密が大事ですよね？」 ○「気密性能はどの程度重視し、どう担保していますか？」）\n"
+        + "\n\nこれから家を建てる施主が、別の住宅会社（B社）との打ち合わせでそのまま聞ける質問を、ポイントごとに1つずつ作ってください。条件:\n"
+        "- A社の答えを前提にした誘導質問にしない（例: ×「高気密が大事ですよね？」 ○「気密性能はどの程度重視していて、どう確認していますか？」）\n"
         "- はい/いいえで終わらず、考え方と理由が引き出せる開いた質問にする\n"
-        "- A社の社名や独自用語は使わない",
+        "- A社の社名や独自用語は使わず、専門知識のない施主でも口に出しやすい言葉にする\n"
+        "- 営業トークでかわされたときのための深掘り質問と、回答で注目すべき点も添える",
         Questions,
     )
     _save(company_dir / "questions.json", result)
-    md = ["# 家づくりの考え方に関する質問票", ""]
-    md += [f"## {q.id}（{q.theme}）\n\n{q.question}\n\n回答:\n\n" for q in result.questions]
-    (company_dir / "questions.md").write_text("\n".join(md), encoding="utf-8")
+    points = {p.id: p for p in kp.key_points}
+
+    # B社との打ち合わせに持っていく質問票（A社の考えは載せない）
+    sheet = ["# 家づくりについての質問票", "", "打ち合わせ中に聞いた回答を「回答:」の下に書き込んでください。", ""]
+    for q in result.questions:
+        sheet += [f"## {q.id}（{q.theme}）", "", q.question, "", "回答:", "", ""]
+    (company_dir / "questions.md").write_text("\n".join(sheet), encoding="utf-8")
+
+    # 施主の手元用メモ（A社の考え・深掘り・聞きどころ）
+    notes = ["# 質問票・手元用メモ（B社には見せない）", ""]
+    for q in result.questions:
+        p = points.get(q.point_id)
+        notes += [f"## {q.id}（{q.theme}）", "", f"**質問:** {q.question}", ""]
+        notes += [f"- 深掘り: {f}" for f in q.follow_ups]
+        notes += [f"- 聞きどころ: {q.listen_for}"]
+        if p:
+            notes += [f"- A社の考え: {p.claim}（理由: {p.reason}）"]
+        notes += [""]
+    (company_dir / "questions_notes.md").write_text("\n".join(notes), encoding="utf-8")
     return result
+
+
+def parse_answer_sheet(path: Path) -> dict[str, str]:
+    """記入済みの questions.md から {"Q01": "回答", ...} を取り出す。"""
+    answers: dict[str, str] = {}
+    current, buf, in_answer = None, [], False
+    for line in path.read_text(encoding="utf-8").splitlines() + ["## END"]:
+        if line.startswith("## "):
+            if current:
+                answers[current] = "\n".join(buf).strip()
+            current, buf, in_answer = line[3:].split("（")[0].strip(), [], False
+        elif line.strip().startswith("回答"):
+            in_answer = True
+            rest = line.split(":", 1)[-1].split("：", 1)[-1].strip()
+            if rest:
+                buf.append(rest)
+        elif in_answer:
+            buf.append(line)
+    return answers
 
 
 def answer_from_videos(questions_path: Path, company_dir: Path) -> Answers:
@@ -206,40 +244,46 @@ def answer_from_videos(questions_path: Path, company_dir: Path) -> Answers:
     return result
 
 
-def compare(a_dir: Path, b_dir: Path, b_answers: Path | None = None) -> Path:
-    """A社の重要ポイントと B社の回答を突き合わせ、比較レポート（Markdown）を出力する。"""
+def compare(a_dir: Path, answers_path: Path, b_name: str = "B社") -> Path:
+    """A社の重要ポイントと B社の回答を突き合わせ、施主向けの比較レポート（Markdown）を出力する。
+
+    answers_path は記入済みの questions.md、{"Q01": "回答", ...} の JSON、
+    または answer コマンドの出力（answers_to_*.json）のいずれか。
+    """
     kp = KeyPoints.model_validate_json((a_dir / "key_points.json").read_text(encoding="utf-8"))
     qs = Questions.model_validate_json((a_dir / "questions.json").read_text(encoding="utf-8"))
-    b_answers = b_answers or b_dir / f"answers_to_{a_dir.name}.json"
-    raw = json.loads(b_answers.read_text(encoding="utf-8"))
-    # 動画から作った Answers 形式のほか、インタビュー結果を {"Q01": "回答", ...} で渡すこともできる
-    answers = raw["answers"] if "answers" in raw else [
-        {"question_id": k, "mentioned": bool(v), "answer": v} for k, v in raw.items()
-    ]
+    if answers_path.suffix == ".md":
+        ans = parse_answer_sheet(answers_path)
+    else:
+        raw = json.loads(answers_path.read_text(encoding="utf-8"))
+        ans = ({a["question_id"]: a["answer"] if a["mentioned"] else "" for a in raw["answers"]}
+               if "answers" in raw else raw)
     points = {p.id: p for p in kp.key_points}
-    ans = {a["question_id"]: a for a in answers}
     rows = []
     for q in qs.questions:
         p = points.get(q.point_id)
-        a = ans.get(q.id, {})
         rows.append(
             f"- {q.id} 質問: {q.question}\n"
+            f"  聞きどころ: {q.listen_for}\n"
             f"  A社: {p.claim + ' ／理由: ' + p.reason if p else '不明'}\n"
-            f"  B社: {a.get('answer') if a.get('mentioned') else '（言及なし）'}"
+            f"  B社の回答: {ans.get(q.id) or '（未回答）'}"
         )
     report = ask(
         SYSTEM,
-        f"A社とB社の家づくりの考え方を比較します。A社の総括: {kp.summary}\n\n" + "\n".join(rows) + "\n\n"
-        "質問ごとに両社の考えを比べ、違いと、それが施主にとって何を意味するかを整理してください。"
-        "B社が言及していない質問は「比較不能」とし、言及していないこと自体が示唆するもの（重視度の違いなど）があれば difference に書いてください。",
+        f"家を建てようとしている施主が、A社の考え方をもとに作った質問を {b_name} にぶつけました。"
+        f"A社の総括: {kp.summary}\n\n" + "\n".join(rows) + "\n\n"
+        "施主が会社を選ぶ判断材料になるよう、質問ごとに両社の考えを比べ、違いとそれが施主の住み心地・費用・リスクに"
+        "どう影響しうるかを整理してください。どちらが正しいかを断定せず、施主が判断するための材料を示してください。"
+        "未回答の質問は「比較不能」としてください。回答が抽象的で根拠や数値が無いものは watch_outs に挙げてください。",
         Report,
         effort="high",
     )
-    out = a_dir / f"compare_{a_dir.name}_vs_{b_dir.name}.md"
-    md = [f"# {a_dir.name} × {b_dir.name} 家づくりの考え方比較", "", report.overview, "",
-          "| # | 判定 | " + a_dir.name + " | " + b_dir.name + " | 違い |", "|---|---|---|---|---|"]
+    out = a_dir / f"compare_{a_dir.name}_vs_{b_name}.md"
+    md = [f"# {a_dir.name} × {b_name} 家づくりの考え方比較", "", report.overview, "",
+          f"| # | 判定 | {a_dir.name} | {b_name} | 違いと施主への影響 |", "|---|---|---|---|---|"]
     md += [f"| {c.question_id} | {c.verdict} | {c.company_a} | {c.company_b} | {c.difference} |"
            for c in report.comparisons]
-    md += ["", "## 追加で聞いてみたい質問", ""] + [f"- {f}" for f in report.follow_up_questions]
+    md += ["", "## 注意したい点", ""] + [f"- {w}" for w in report.watch_outs]
+    md += ["", "## 次の打ち合わせで聞きたいこと", ""] + [f"- {f}" for f in report.follow_up_questions]
     out.write_text("\n".join(md), encoding="utf-8")
     return out

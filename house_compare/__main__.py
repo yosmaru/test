@@ -16,17 +16,17 @@ def main() -> None:
     p.add_argument("company_dir", type=Path)
     p.add_argument("--max-points", type=int, default=20)
 
-    p = sub.add_parser("questions", help="重要ポイントを質問に変換")
+    p = sub.add_parser("questions", help="重要ポイントを質問票に変換")
     p.add_argument("company_dir", type=Path)
 
-    p = sub.add_parser("answer", help="別の会社の動画から質問への回答を作る")
+    p = sub.add_parser("answer", help="（任意）別の会社の動画から質問への回答を推定する")
     p.add_argument("questions_json", type=Path, help="A社の questions.json")
     p.add_argument("other_company_dir", type=Path)
 
-    p = sub.add_parser("compare", help="比較レポートを作る")
+    p = sub.add_parser("compare", help="B社の回答と比較したレポートを作る")
     p.add_argument("company_a_dir", type=Path)
-    p.add_argument("company_b_dir", type=Path)
-    p.add_argument("--answers", type=Path, help="インタビュー等で集めた B社の回答 JSON")
+    p.add_argument("answers", type=Path, help="記入済みの questions.md、または回答 JSON")
+    p.add_argument("--name", default="B社", help="比較相手の会社名")
 
     args = parser.parse_args()
     if args.cmd == "crawl":
@@ -43,7 +43,7 @@ def main() -> None:
     elif args.cmd == "answer":
         analyze.answer_from_videos(args.questions_json, args.other_company_dir)
     elif args.cmd == "compare":
-        print(analyze.compare(args.company_a_dir, args.company_b_dir, args.answers))
+        print(analyze.compare(args.company_a_dir, args.answers, args.name))
 
 
 if __name__ == "__main__":
